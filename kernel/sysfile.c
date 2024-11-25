@@ -15,6 +15,7 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include "user/user.h"
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
@@ -314,7 +315,25 @@ sys_open(void)
   if((n = argstr(0, path, MAXPATH)) < 0)
     return -1;
 
+  if ((ip = namei(path)) == 0)
+    return -1;
+
+  if (ip->perm == 5) {
+    iput(ip);
+    return -1;
+  }
+
+  if (omode == O_WRONLY || omode == O_RDWR) {
+    if (ip->perm == 1) {
+      iput(ip);
+      return -1;
+    }
+  }
+
+
+
   begin_op();
+
 
   if(omode & O_CREATE){
     ip = create(path, T_FILE, 0, 0);
@@ -502,4 +521,49 @@ sys_pipe(void)
     return -1;
   }
   return 0;
+}
+
+
+int sys_chmod(void) {
+    char path[128];  // Búfer adecuado para el nombre del archivo
+    int mode;
+
+    // Obtener los argumentos (nombre del archivo y permisos)
+    if (argstr(0, path, sizeof(path)) < 0 || argint(1, &mode) < 0)
+        return -1;
+
+    return chmod(path, mode);
+}
+
+
+
+
+int chmod(char *path, int mode) {
+    struct inode *ip;
+    struct proc *p = myproc();
+    int valid_mode;
+
+    // Buscar el archivo
+    if ((ip = namei(path)) == 0)
+        return -1;  // Archivo no encontrado
+
+    // Verificar si el archivo es inmutable (permiso 5)
+    if (ip->perm == 5) {
+        iput(ip);  // Liberar inode
+        return -1;  // No se pueden cambiar permisos en un archivo inmutable
+    }
+
+    // Verificar que el modo sea válido (entre 0 y 5)
+    valid_mode = (mode >= 0 && mode <= 5);
+    if (!valid_mode) {
+        iput(ip);  // Liberar inode
+        return -1;  // Modo inválido
+    }
+
+    // Actualizar los permisos del inode
+    ip->perm = mode;
+    iupdate(ip);  // Actualizar el inode en el sistema de archivos
+
+    iput(ip);  // Liberar inode
+    return 0;  // Éxito
 }
